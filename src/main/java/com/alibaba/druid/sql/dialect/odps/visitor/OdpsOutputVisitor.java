@@ -21,7 +21,6 @@ import com.alibaba.druid.sql.ast.expr.SQLCharExpr;
 import com.alibaba.druid.sql.ast.expr.SQLMethodInvokeExpr;
 import com.alibaba.druid.sql.ast.statement.*;
 import com.alibaba.druid.sql.ast.statement.SQLJoinTableSource.JoinType;
-import com.alibaba.druid.sql.dialect.hive.stmt.HiveCreateTableStatement;
 import com.alibaba.druid.sql.dialect.hive.stmt.HiveLoadDataStatement;
 import com.alibaba.druid.sql.dialect.hive.visitor.HiveOutputVisitor;
 import com.alibaba.druid.sql.dialect.odps.ast.*;
@@ -29,8 +28,6 @@ import com.alibaba.druid.sql.dialect.odps.ast.*;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-
-import static com.alibaba.druid.sql.dialect.odps.ast.OdpsAddFileStatement.FileType.JAR;
 
 public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisitor {
     private Set<String> builtInFunctions = new HashSet<String>();
@@ -290,7 +287,13 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
 
     @Override
     public boolean visit(SQLJoinTableSource x) {
-        x.getLeft().accept(this);
+        SQLTableSource left = x.getLeft();
+        left.accept(this);
+
+        if (left.hasAfterComment() && isPrettyFormat()) {
+            println();
+            printlnComment(left.getAfterCommentsDirect());
+        }
 
         if (x.getJoinType() == JoinType.COMMA) {
             print(',');
@@ -465,6 +468,12 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
             x.getOrderBy().accept(this);
         }
 
+        SQLZOrderBy zorderBy = x.getZOrderBy();
+        if (zorderBy != null) {
+            println();
+            zorderBy.accept(this);
+        }
+
         final List<SQLSelectOrderByItem> distributeBy = x.getDistributeByDirect();
         if (distributeBy.size() > 0) {
             println();
@@ -498,6 +507,23 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
         int itemSize = x.getItems().size();
         if (itemSize > 0) {
             print0(ucase ? "ORDER BY " : "order by ");
+            this.indentCount++;
+            for (int i = 0; i < itemSize; ++i) {
+                if (i != 0) {
+                    println(", ");
+                }
+                x.getItems().get(i).accept(this);
+            }
+            this.indentCount--;
+        }
+
+        return false;
+    }
+
+    public boolean visit(SQLZOrderBy x) {
+        int itemSize = x.getItems().size();
+        if (itemSize > 0) {
+            print0(ucase ? "ZORDER BY " : "zorder by ");
             this.indentCount++;
             for (int i = 0; i < itemSize; ++i) {
                 if (i != 0) {
@@ -639,7 +665,12 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
 
     public boolean visit(SQLDataType x) {
         String dataTypeName = x.getName();
-        print0(ucase ? dataTypeName.toUpperCase() : dataTypeName.toLowerCase());
+        if (dataTypeName.indexOf('<') != -1 || dataTypeName.equals("Object")) {
+            print0(dataTypeName);
+        } else {
+            print0(ucase ? dataTypeName.toUpperCase() : dataTypeName.toLowerCase());
+        }
+
         if (x.getArguments().size() > 0) {
             print('(');
             printAndAccept(x.getArguments(), ", ");
@@ -650,6 +681,10 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
     }
 
     protected void printFunctionName(String name) {
+        if (name == null) {
+            return;
+        }
+
         String upperName = name.toUpperCase();
         if (builtInFunctions.contains(upperName)) {
             print0(ucase ? upperName : name);
@@ -804,10 +839,10 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
         print0(ucase ? "ADD TABLE " : "add table ");
         x.getTable().accept(this);
 
-        List<SQLAssignItem> partitoins = x.getPartitoins();
-        if (partitoins.size() > 0) {
+        List<SQLAssignItem> partitions = x.getPartitions();
+        if (partitions.size() > 0) {
             print0(ucase ? " PARTITION (" : " partition (");
-            printAndAccept(partitoins, ", ");
+            printAndAccept(partitions, ", ");
             print(')');
         }
 
@@ -819,6 +854,18 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
 
         if (x.isForce()) {
             print0(" -f");
+        }
+
+        SQLName toPackage = x.getToPackage();
+        if (toPackage != null) {
+            print0(ucase ? " TO PACKAGE " : " to package ");
+            printExpr(toPackage);
+
+            List<SQLPrivilegeItem> privileges = x.getPrivileges();
+            if (!privileges.isEmpty()) {
+                print0(ucase ? " WITH PRIVILEGES " : " with privileges ");
+                printAndAccept(privileges, ", ");
+            }
         }
 
         return false;
@@ -887,6 +934,13 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
     }
 
     @Override
+    public boolean visit(OdpsAlterTableSetFileFormat x) {
+        print0(ucase ? "SET FILEFORMAT " : "set fileformat ");
+        x.getValue().accept(this);
+        return false;
+    }
+
+    @Override
     public boolean visit(OdpsCountStatement x) {
         List<SQLCommentHint> headHints = x.getHeadHintsDirect();
         if (headHints != null) {
@@ -903,10 +957,10 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
         print0(ucase ? "COUNT " : "count ");
         x.getTable().accept(this);
 
-        List<SQLAssignItem> partitoins = x.getPartitoins();
-        if (partitoins.size() > 0) {
+        List<SQLAssignItem> partitions = x.getPartitions();
+        if (partitions.size() > 0) {
             print0(ucase ? " PARTITION (" : " partition (");
-            printAndAccept(partitoins, ", ");
+            printAndAccept(partitions, ", ");
             print(')');
         }
         return false;
@@ -940,12 +994,19 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
             printAndAccept(resources, ", ");
         }
 
-        List<SQLExpr> outputColumns = x.getOutputColumns();
+        List<SQLColumnDefinition> outputColumns = x.getOutputColumns();
         if (!outputColumns.isEmpty()) {
             println();
             print0(ucase ? "AS (" : "as (");
-            printAndAccept(resources, ", ");
+            printAndAccept(outputColumns, ", ");
             print(')');
+        }
+
+        SQLExternalRecordFormat inputRowFormat = x.getInputRowFormat();
+        if (inputRowFormat != null) {
+            println();
+            print0(ucase ? "ROW FORMAT DELIMITED" : "row format delimited");
+            inputRowFormat.accept(this);
         }
 
         return false;
@@ -1004,7 +1065,14 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
         if (storedAs != null) {
             println();
             print0(ucase ? "STORED AS " : "stored as ");
-            storedAs.accept(this);
+            printExpr(storedAs);
+        }
+
+        SQLExpr using = x.getUsing();
+        if (using != null) {
+            println();
+            print0(ucase ? "USING " : "using ");
+            printExpr(using);
         }
 
         return false;
@@ -1014,6 +1082,12 @@ public class OdpsOutputVisitor extends HiveOutputVisitor implements OdpsASTVisit
     public boolean visit(OdpsNewExpr x) {
         print0("new ");
         super.visit((SQLMethodInvokeExpr) x);
+        return false;
+    }
+
+    public boolean visit(OdpsInstallPackageStatement x) {
+        print0(ucase ? "INSTALL PACKAGE " : "install package ");
+        printExpr(x.getPackageName());
         return false;
     }
 }

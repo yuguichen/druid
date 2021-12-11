@@ -94,7 +94,7 @@ public class MySqlOutputVisitor extends SQLASTOutputVisitor implements MySqlASTV
     }
 
     public boolean visit(MySqlSelectQueryBlock x) {
-        final boolean bracket = x.isBracket();
+        final boolean bracket = x.isParenthesized();
         if (bracket) {
             print('(');
         }
@@ -701,7 +701,17 @@ public class MySqlOutputVisitor extends SQLASTOutputVisitor implements MySqlASTV
         }
         print(')');
 
+        SQLIndexDefinition indexDefinition = x.getIndexDefinition();
+        if (indexDefinition.hasOptions()) {
+            indexDefinition.getOptions().accept(this);
+        }
+
         SQLExpr comment = x.getComment();
+        if (indexDefinition.hasOptions()
+                && indexDefinition.getOptions().getComment() == comment) {
+            comment = null;
+        }
+
         if (comment != null) {
             print0(ucase ? " COMMENT " : " comment ");
             printExpr(comment);
@@ -2226,6 +2236,11 @@ public class MySqlOutputVisitor extends SQLASTOutputVisitor implements MySqlASTV
             }
         }
 
+        if (x.getWith() != null) {
+            x.getWith().accept(this);
+            println();
+        }
+
         List<SQLExpr> returning = x.getReturning();
         if (returning != null && returning.size() > 0) {
             print0(ucase ? "SELECT " : "select ");
@@ -3412,7 +3427,7 @@ public class MySqlOutputVisitor extends SQLASTOutputVisitor implements MySqlASTV
     }
 
     @Override
-    public boolean visit(MySqlShowVariantsStatement x) {
+    public boolean visit(SQLShowVariantsStatement x) {
         print0(ucase ? "SHOW " : "show ");
 
         if (x.isGlobal()) {

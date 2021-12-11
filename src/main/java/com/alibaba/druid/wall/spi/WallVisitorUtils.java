@@ -26,6 +26,7 @@ import com.alibaba.druid.sql.dialect.mysql.ast.expr.MySqlOutFileExpr;
 import com.alibaba.druid.sql.dialect.mysql.ast.statement.*;
 import com.alibaba.druid.sql.dialect.mysql.parser.MySqlStatementParser;
 import com.alibaba.druid.sql.dialect.oracle.ast.stmt.OracleExecuteImmediateStatement;
+import com.alibaba.druid.sql.dialect.oracle.ast.stmt.OracleLockTableStatement;
 import com.alibaba.druid.sql.dialect.oracle.ast.stmt.OracleMultiInsertStatement;
 import com.alibaba.druid.sql.dialect.sqlserver.ast.stmt.SQLServerExecStatement;
 import com.alibaba.druid.sql.dialect.sqlserver.ast.stmt.SQLServerInsertStatement;
@@ -1710,44 +1711,56 @@ public class WallVisitorUtils {
     }
 
     public static void checkFunction(WallVisitor visitor, SQLMethodInvokeExpr x) {
-
         final WallTopStatementContext topStatementContext = wallTopStatementContextLocal.get();
         if (topStatementContext != null && (topStatementContext.fromSysSchema || topStatementContext.fromSysTable)) {
             return;
         }
 
-        checkSchema(visitor, x.getOwner());
+        String methodName = x.getMethodName().toLowerCase();
+        SQLExpr owner = x.getOwner();
+
+        WallProvider provider = visitor.getProvider();
 
         if (!visitor.getConfig().isFunctionCheck()) {
             return;
         }
-
-        String methodName = x.getMethodName().toLowerCase();
 
         WallContext context = WallContext.current();
         if (context != null) {
             context.incrementFunctionInvoke(methodName);
         }
 
-        if (!visitor.getProvider().checkDenyFunction(methodName)) {
-            boolean isTopNoneFrom = isTopNoneFromSelect(visitor, x);
-            if (isTopNoneFrom) {
+        if (owner != null) {
+            String fullName = (owner.toString() + '.' + methodName).toLowerCase();
+            if (provider.getConfig().getPermitFunctions().contains(fullName)) {
                 return;
             }
 
-            if (isTopFromDenySchema(visitor, x)) {
-                return;
-            }
-
-            boolean isShow = x.getParent() instanceof MySqlShowGrantsStatement;
-            if (isShow) {
-                return;
-            }
-
-            if (isWhereOrHaving(x) || checkSqlExpr(x)) {
-                addViolation(visitor, ErrorCode.FUNCTION_DENY, "deny function : " + methodName, x);
-            }
+            checkSchema(visitor, owner);
         }
+
+        if (provider.checkDenyFunction(methodName)) {
+            return;
+        }
+
+        boolean isTopNoneFrom = isTopNoneFromSelect(visitor, x);
+        if (isTopNoneFrom) {
+            return;
+        }
+
+        if (isTopFromDenySchema(visitor, x)) {
+            return;
+        }
+
+        boolean isShow = x.getParent() instanceof MySqlShowGrantsStatement;
+        if (isShow) {
+            return;
+        }
+
+        if (isWhereOrHaving(x) || checkSqlExpr(x)) {
+            addViolation(visitor, ErrorCode.FUNCTION_DENY, "deny function : " + methodName, x);
+        }
+
     }
 
     public static SQLSelectQueryBlock getQueryBlock(SQLObject x) {
@@ -2277,12 +2290,12 @@ public class WallVisitorUtils {
             SQLSelectQuery left = x.getLeft();
             SQLSelectQuery right = x.getRight();
 
-            boolean bracket = x.isBracket() && !(x.getParent() instanceof SQLUnionQueryTableSource);
+            boolean bracket = x.isParenthesized() && !(x.getParent() instanceof SQLUnionQueryTableSource);
 
             if ((!bracket)
                     && left instanceof SQLUnionQuery
                     && ((SQLUnionQuery) left).getOperator() == operator
-                    && !right.isBracket()
+                    && !right.isParenthesized()
                     && x.getOrderBy() == null) {
 
                 SQLUnionQuery leftUnion = (SQLUnionQuery) left;
@@ -2294,10 +2307,10 @@ public class WallVisitorUtils {
                     SQLSelectQuery leftLeft = leftUnion.getLeft();
                     SQLSelectQuery leftRight = leftUnion.getRight();
 
-                    if ((!leftUnion.isBracket())
+                    if ((!leftUnion.isParenthesized())
                             && leftUnion.getOrderBy() == null
-                            && (!leftLeft.isBracket())
-                            && (!leftRight.isBracket())
+                            && (!leftLeft.isParenthesized())
+                            && (!leftRight.isParenthesized())
                             && leftLeft instanceof SQLUnionQuery
                             && ((SQLUnionQuery) leftLeft).getOperator() == operator) {
                         rights.add(leftRight);
@@ -2636,7 +2649,11 @@ public class WallVisitorUtils {
             allow = config.isHintAllow();
             denyMessage = "hint not allow";
             errorCode = ErrorCode.HINT_NOT_ALLOW;
-        } else if (x instanceof MySqlLockTableStatement) {
+        } else if (x instanceof SQLLockTableStatement) {
+            allow = config.isLockTableAllow();
+            denyMessage = "lock table not allow";
+            errorCode = ErrorCode.LOCK_TABLE_NOT_ALLOW;
+        } else if (x instanceof OracleLockTableStatement) {
             allow = config.isLockTableAllow();
             denyMessage = "lock table not allow";
             errorCode = ErrorCode.LOCK_TABLE_NOT_ALLOW;

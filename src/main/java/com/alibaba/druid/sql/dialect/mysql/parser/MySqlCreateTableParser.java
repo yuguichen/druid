@@ -348,6 +348,10 @@ public class MySqlCreateTableParser extends SQLCreateTableParser {
                         stmt.getTableElementList().add(column);
                     }
 
+                    if (lexer.token() == Token.HINT) {
+                        lexer.nextToken();
+                    }
+
                     if (lexer.token() != Token.COMMA) {
                         break;
                     } else {
@@ -388,7 +392,7 @@ public class MySqlCreateTableParser extends SQLCreateTableParser {
                 } else {
                     expr = this.exprParser.expr();
                 }
-                stmt.addOption("ENGINE", expr);
+                stmt.setEngine(expr);
                 continue;
             }
 
@@ -849,8 +853,8 @@ public class MySqlCreateTableParser extends SQLCreateTableParser {
 
             if (lexer.identifierEquals(FnvHash.Constants.DBPARTITIONS)) {
                 lexer.nextToken();
-                SQLExpr dbPartitoins = this.exprParser.primary();
-                stmt.setDbPartitions(dbPartitoins);
+                SQLExpr dbPartitions = this.exprParser.primary();
+                stmt.setDbPartitions(dbPartitions);
                 continue;
             }
 
